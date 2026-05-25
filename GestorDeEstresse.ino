@@ -1,6 +1,7 @@
 /**
  * Projeto: Sistema Ciberfisico de Monitoramento Termico (TDE)
  * Disciplina: Performance em Sistemas Ciberfisicos (PUCPR)
+ * Autor: João Pedro Gadens Mosson
  */
 
 #include <WiFi.h>
@@ -33,6 +34,7 @@ TaskHandle_t TaskDisplayHandle;
 hw_timer_t * timer = NULL;
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 
+// CORREÇÃO: Interrupção fechando a zona crítica corretamente
 void IRAM_ATTR onTimer() {
   portENTER_CRITICAL_ISR(&timerMux);
   hw_uptime_seconds++;
@@ -101,20 +103,35 @@ const char index_html[] PROGMEM = R"rawliteral(
     <h2>Análise de Recursos do Sistema</h2>
     <div class="grid">
       <div class="card">
-        <h4>Memória RAM (Heap Livre)</h4>
+        <h4>Memória RAM Atual</h4>
         <div class="temp-value"><span id="heap">--</span> KB</div>
+      </div>
+      <div class="card">
+        <h4>Pico de Consumo (Min RAM)</h4>
+        <div class="temp-value"><span id="min-heap">--</span> KB</div>
+        <p style="font-size: 0.8em; margin-top:5px;">Histórico de menor RAM livre</p>
       </div>
       <div class="card">
         <h4>Frequência da CPU</h4>
         <div class="temp-value"><span id="cpu">--</span> MHz</div>
       </div>
       <div class="card">
-        <h4>Uptime (Hardware Timer)</h4>
+        <h4>Uptime (Hardware)</h4>
         <div class="temp-value"><span id="uptime">--</span> s</div>
+      </div>
+      <div class="card">
+        <h4>Threads do SO (Tasks)</h4>
+        <div class="temp-value"><span id="tasks">--</span></div>
+        <p style="font-size: 0.8em; margin-top:5px;">Total no FreeRTOS</p>
+      </div>
+      <div class="card">
+        <h4>Task mais Crítica</h4>
+        <div style="font-size: 1.3rem; font-weight: bold; color: var(--primary); margin-top: 15px;"><span id="prio">--</span></div>
+        <p style="font-size: 0.8em; margin-top:5px;">Preempção habilitada no Core 0</p>
       </div>
     </div>
     <p style="text-align:center; margin-top: 20px; font-size: 0.9em; color:#666;">
-      Sistema rodando sob FreeRTOS (Real-Time Operating System). Multithreading ativo com escalonamento preemptivo.
+      Sistema rodando sob FreeRTOS. Multithreading ativo com escalonamento preemptivo.
     </p>
   </div>
 
@@ -175,11 +192,14 @@ const char index_html[] PROGMEM = R"rawliteral(
         tempChart.update();
       });
 
-      // Busca Dados de Performance
+      // Busca Dados de Performance (ATUALIZADO)
       fetch('/stats').then(res => res.json()).then(json => {
         document.getElementById("heap").innerHTML = (json.heap / 1024).toFixed(1);
+        document.getElementById("min-heap").innerHTML = (json.min_heap / 1024).toFixed(1);
         document.getElementById("cpu").innerHTML = json.cpu;
         document.getElementById("uptime").innerHTML = json.uptime;
+        document.getElementById("tasks").innerHTML = json.tasks;
+        document.getElementById("prio").innerHTML = json.prio_app;
       });
     }, 2000);
   </script>
@@ -290,13 +310,20 @@ void setup() {
     request->send(200, "application/json", response);
   });
 
+  // Rota de ESTATÍSTICAS ATUALIZADA
   server.on("/stats", HTTP_GET, [](AsyncWebServerRequest *request) {
-    StaticJsonDocument<200> doc;
+    StaticJsonDocument<300> doc;
     doc["heap"] = ESP.getFreeHeap();
+    doc["min_heap"] = ESP.getMinFreeHeap(); 
     doc["cpu"] = ESP.getCpuFreqMHz();
+    
     portENTER_CRITICAL(&timerMux);
     doc["uptime"] = hw_uptime_seconds;
     portEXIT_CRITICAL(&timerMux);
+    
+    doc["tasks"] = uxTaskGetNumberOfTasks(); 
+    doc["prio_app"] = "Task_Controle (Prio 2)"; 
+    
     String response;
     serializeJson(doc, response);
     request->send(200, "application/json", response);
