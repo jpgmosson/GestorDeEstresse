@@ -10,8 +10,8 @@
 #include <LiquidCrystal_I2C.h>
 #include <ArduinoJson.h>
 
-const char* ssid = "Mauricio";
-const char* password = "E70B2048-m";
+const char* ssid = "joao";
+const char* password = "jjjhhhmmm";
 
 #define SENSOR_PIN 4
 #define PIN_RELE 12     
@@ -35,7 +35,8 @@ portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 
 void IRAM_ATTR onTimer() {
   portENTER_CRITICAL_ISR(&timerMux);
-  hw_uptime_seconds++; 
+  hw_uptime_seconds++;
+  portEXIT_CRITICAL_ISR(&timerMux); 
 }
 
 const char index_html[] PROGMEM = R"rawliteral(
