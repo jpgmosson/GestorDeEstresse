@@ -141,7 +141,13 @@ const char index_html[] PROGMEM = R"rawliteral(
       <li><strong>Instituição:</strong> Pontifícia Universidade Católica do Paraná (PUCPR)</li>
       <li><strong>Curso:</strong> Engenharia de Software</li>
       <li><strong>Disciplina:</strong> Performance em Sistemas Ciberfísicos</li>
-      <li><strong>Autor:</strong> João Pedro Gadens Mosson</li>
+      <li><strong>Equipe:</strong></li>
+      <li>João Pedro Gadens Mosson</li>
+      <li>João Pedro Magri Pozzan</li>
+      <li>Eduardo Skoroboatei Gomes</li>
+      <li>André Murilo Pinz Gomes</li>
+      <li>Nicole Harumi Futikami</li>
+      <li><strong>GitHub:</strong> https://github.com/jpgmosson/GestorDeEstresse</li>
       <li><strong>Semestre:</strong> 3º Período - 2026/1</li>
     </ul>
   </div>
