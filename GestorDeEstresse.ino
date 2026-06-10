@@ -10,6 +10,7 @@
 #include <DallasTemperature.h>
 #include <LiquidCrystal_I2C.h>
 #include <ArduinoJson.h>
+#include <ESP32Servo.h> // Biblioteca do Servo
 
 const char* ssid = "joao";
 const char* password = "jjjhhhmmm";
@@ -17,15 +18,18 @@ const char* password = "jjjhhhmmm";
 #define SENSOR_PIN 4
 #define PIN_RELE 12     
 #define PIN_BUZZER 26 
+#define PIN_SERVO 19 // <-- Servo Motor agora no D19
 
 OneWire oneWire(SENSOR_PIN);
 DallasTemperature sensors(&oneWire);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 AsyncWebServer server(80);
+Servo escotilha; // Objeto da escotilha
 
 float tempAtual = 0.0;
 float tempMax = 0.0;
 volatile unsigned long hw_uptime_seconds = 0; 
+bool sistemaAtivo = false; // Controle da máquina de estados (Escotilha -> Ventoinha)
 
 TaskHandle_t TaskSensorHandle;
 TaskHandle_t TaskControlHandle;
@@ -34,7 +38,6 @@ TaskHandle_t TaskDisplayHandle;
 hw_timer_t * timer = NULL;
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 
-// CORREÇÃO: Interrupção fechando a zona crítica corretamente
 void IRAM_ATTR onTimer() {
   portENTER_CRITICAL_ISR(&timerMux);
   hw_uptime_seconds++;
@@ -52,20 +55,17 @@ const char index_html[] PROGMEM = R"rawliteral(
     :root { --primary: #2c3e50; --success: #2e7d32; --danger: #c62828; --bg: #f4f7f6; }
     body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--bg); color: #333; margin: 0; padding: 20px; }
     .header { text-align: center; margin-bottom: 20px; }
-    /* Sistema de Abas */
     .tabs { display: flex; justify-content: center; gap: 10px; margin-bottom: 20px; }
     .tab-btn { padding: 10px 20px; border: none; background: #ddd; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.3s; }
     .tab-btn.active { background: var(--primary); color: white; }
     .tab-content { display: none; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 800px; margin: 0 auto; }
     .tab-content.active { display: block; }
-    /* Cards e Dados */
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; text-align: center; }
     .card { padding: 20px; border-radius: 10px; background: #f9f9f9; border: 1px solid #eee; }
     .temp-value { font-size: 3rem; font-weight: bold; color: var(--primary); }
     .status { padding: 10px; border-radius: 5px; font-weight: bold; margin-top: 10px; }
     .normal { background: #e8f5e9; color: var(--success); }
     .alerta { background: #ffebee; color: var(--danger); animation: blink 1s infinite; }
-    /* Grafico */
     .chart-container { position: relative; height: 300px; width: 100%; margin-top: 20px; }
     @keyframes blink { 50% { opacity: 0.7; } }
   </style>
@@ -92,6 +92,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         <h3>Status do Atuador</h3>
         <div id="status-box" class="status normal">SISTEMA ESTÁVEL</div>
         <p>Relé Ventoinha: <span id="rele-status">Desligado</span></p>
+        <p>Escotilha: <span id="servo-status">Fechada</span></p>
       </div>
     </div>
     <div class="chart-container">
@@ -102,37 +103,14 @@ const char index_html[] PROGMEM = R"rawliteral(
   <div id="stats" class="tab-content">
     <h2>Análise de Recursos do Sistema</h2>
     <div class="grid">
-      <div class="card">
-        <h4>Memória RAM Atual</h4>
-        <div class="temp-value"><span id="heap">--</span> KB</div>
-      </div>
-      <div class="card">
-        <h4>Pico de Consumo (Min RAM)</h4>
-        <div class="temp-value"><span id="min-heap">--</span> KB</div>
-        <p style="font-size: 0.8em; margin-top:5px;">Histórico de menor RAM livre</p>
-      </div>
-      <div class="card">
-        <h4>Frequência da CPU</h4>
-        <div class="temp-value"><span id="cpu">--</span> MHz</div>
-      </div>
-      <div class="card">
-        <h4>Uptime (Hardware)</h4>
-        <div class="temp-value"><span id="uptime">--</span> s</div>
-      </div>
-      <div class="card">
-        <h4>Threads do SO (Tasks)</h4>
-        <div class="temp-value"><span id="tasks">--</span></div>
-        <p style="font-size: 0.8em; margin-top:5px;">Total no FreeRTOS</p>
-      </div>
-      <div class="card">
-        <h4>Task mais Crítica</h4>
-        <div style="font-size: 1.3rem; font-weight: bold; color: var(--primary); margin-top: 15px;"><span id="prio">--</span></div>
-        <p style="font-size: 0.8em; margin-top:5px;">Preempção habilitada no Core 0</p>
-      </div>
+      <div class="card"><h4>Memória RAM Atual</h4><div class="temp-value"><span id="heap">--</span> KB</div></div>
+      <div class="card"><h4>Pico de Consumo</h4><div class="temp-value"><span id="min-heap">--</span> KB</div><p style="font-size: 0.8em; margin-top:5px;">Histórico de menor RAM livre</p></div>
+      <div class="card"><h4>Frequência da CPU</h4><div class="temp-value"><span id="cpu">--</span> MHz</div></div>
+      <div class="card"><h4>Uptime (Hardware)</h4><div class="temp-value"><span id="uptime">--</span> s</div></div>
+      <div class="card"><h4>Threads do SO</h4><div class="temp-value"><span id="tasks">--</span></div><p style="font-size: 0.8em; margin-top:5px;">Total no FreeRTOS</p></div>
+      <div class="card"><h4>Task mais Crítica</h4><div style="font-size: 1.3rem; font-weight: bold; color: var(--primary); margin-top: 15px;"><span id="prio">--</span></div><p style="font-size: 0.8em; margin-top:5px;">Preempção habilitada no Core 0</p></div>
     </div>
-    <p style="text-align:center; margin-top: 20px; font-size: 0.9em; color:#666;">
-      Sistema rodando sob FreeRTOS. Multithreading ativo com escalonamento preemptivo.
-    </p>
+    <p style="text-align:center; margin-top: 20px; font-size: 0.9em; color:#666;">Sistema rodando sob FreeRTOS. Multithreading ativo com escalonamento preemptivo.</p>
   </div>
 
   <div id="about" class="tab-content">
@@ -153,7 +131,6 @@ const char index_html[] PROGMEM = R"rawliteral(
   </div>
 
   <script>
-    // Lógica das Abas
     function openTab(tabId) {
       document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
       document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
@@ -161,7 +138,6 @@ const char index_html[] PROGMEM = R"rawliteral(
       event.currentTarget.classList.add('active');
     }
 
-    // Configuração do Gráfico (Chart.js)
     const ctx = document.getElementById('tempChart').getContext('2d');
     const tempChart = new Chart(ctx, {
       type: 'line',
@@ -169,27 +145,27 @@ const char index_html[] PROGMEM = R"rawliteral(
       options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: false } } }
     });
 
-    // Função de Polling Dinâmico Assíncrono
     setInterval(function() {
-      // Busca Dados de Monitoramento
       fetch('/data').then(res => res.json()).then(json => {
         document.getElementById("valor").innerHTML = json.temp.toFixed(1);
         document.getElementById("limite").innerHTML = json.max.toFixed(1);
         
         const statusBox = document.getElementById("status-box");
         const releStatus = document.getElementById("rele-status");
+        const servoStatus = document.getElementById("servo-status");
         
         if(json.temp > json.max) {
           statusBox.innerHTML = "ALERTA: ATUADOR ATIVADO!";
           statusBox.className = "status alerta";
           releStatus.innerHTML = "<strong>LIGADO (12V)</strong>";
+          servoStatus.innerHTML = "<strong>Aberta (90°)</strong>";
         } else {
           statusBox.innerHTML = "SISTEMA ESTÁVEL";
           statusBox.className = "status normal";
           releStatus.innerHTML = "Desligado";
+          servoStatus.innerHTML = "Fechada";
         }
 
-        // Atualiza Gráfico
         const now = new Date();
         const timeLabel = now.getHours() + ':' + now.getMinutes() + ':' + now.getSeconds();
         if(tempChart.data.labels.length > 15) { tempChart.data.labels.shift(); tempChart.data.datasets[0].data.shift(); }
@@ -198,7 +174,6 @@ const char index_html[] PROGMEM = R"rawliteral(
         tempChart.update();
       });
 
-      // Busca Dados de Performance (ATUALIZADO)
       fetch('/stats').then(res => res.json()).then(json => {
         document.getElementById("heap").innerHTML = (json.heap / 1024).toFixed(1);
         document.getElementById("min-heap").innerHTML = (json.min_heap / 1024).toFixed(1);
@@ -222,13 +197,30 @@ void TaskSensor(void *pvParameters) {
 void TaskControl(void *pvParameters) {
   for(;;) {
     if (tempAtual > tempMax && tempMax > 0) {
-      digitalWrite(PIN_RELE, HIGH);   
+      // 1. Lógica de Abertura (Abre escotilha, depois liga ventoinha)
+      if (!sistemaAtivo) {
+        escotilha.write(90); // Gira o servo para 90 graus
+        vTaskDelay(pdMS_TO_TICKS(600)); // Espera a engrenagem chegar na posição
+        digitalWrite(PIN_RELE, HIGH); // Liga a ventoinha
+        sistemaAtivo = true;
+      }
+      
+      // Apito contínuo de alerta térmico
       tone(PIN_BUZZER, 1500); 
       vTaskDelay(pdMS_TO_TICKS(300));
       noTone(PIN_BUZZER);
       digitalWrite(PIN_BUZZER, HIGH); 
       vTaskDelay(pdMS_TO_TICKS(100));
+
     } else {
+      // 2. Lógica de Fechamento (Desliga ventoinha, depois fecha escotilha)
+      if (sistemaAtivo) {
+        digitalWrite(PIN_RELE, LOW); // Corta energia da ventoinha
+        vTaskDelay(pdMS_TO_TICKS(1000)); // Espera a hélice parar de rodar por inércia
+        escotilha.write(0); // Fecha a escotilha
+        sistemaAtivo = false;
+      }
+      
       digitalWrite(PIN_RELE, LOW);    
       noTone(PIN_BUZZER);
       digitalWrite(PIN_BUZZER, HIGH); 
@@ -263,6 +255,11 @@ void setup() {
   pinMode(PIN_BUZZER, OUTPUT);
   digitalWrite(PIN_RELE, LOW);
   digitalWrite(PIN_BUZZER, HIGH); 
+
+  // Configuração do Servo Motor
+  escotilha.setPeriodHertz(50); // Frequência do SG90
+  escotilha.attach(PIN_SERVO, 500, 2400); // Acopla o D19
+  escotilha.write(0); // Força a posição fechada logo no boot
 
   lcd.init();
   lcd.backlight();
@@ -316,7 +313,6 @@ void setup() {
     request->send(200, "application/json", response);
   });
 
-  // Rota de ESTATÍSTICAS ATUALIZADA
   server.on("/stats", HTTP_GET, [](AsyncWebServerRequest *request) {
     StaticJsonDocument<300> doc;
     doc["heap"] = ESP.getFreeHeap();
