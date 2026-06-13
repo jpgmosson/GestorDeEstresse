@@ -2,7 +2,7 @@
  * Projeto: Sistema Ciberfisico de Monitoramento Termico (TDE)
  * Disciplina: Performance em Sistemas Ciberfisicos (PUCPR)
  * Autor: João Pedro Gadens Mosson
- * Versão Final: LDR Corrigido, Super Aba de Performance
+ * Versão Final: Sem Alertas de LDR, Luminosidade em Porcentagem e 12 Cards de Performance
  */
 
 #include <WiFi.h>
@@ -23,10 +23,6 @@ const char *password = "jjjhhhmmm";
 #define PIN_SERVO 19
 #define PIN_LDR_ANALOG 34
 
-// LDR Invertido: Quarto = 1700. Lanterna/Fogo = 0.
-// Dispara quando for MENOR que 1000.
-int LIMITE_LDR = 1000;
-
 OneWire oneWire(SENSOR_PIN);
 DallasTemperature sensors(&oneWire);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
@@ -39,10 +35,7 @@ int rawLDR = 0;
 volatile unsigned long hw_uptime_seconds = 0;
 
 bool sistemaAtivo = false;
-bool gabineteViolado = false;
-
 bool last_alarme_termico = false;
-bool last_gabinete_violado = false;
 
 TaskHandle_t TaskSensorHandle;
 TaskHandle_t TaskControlHandle;
@@ -126,9 +119,9 @@ const char index_html[] PROGMEM = R"=====(
         <p>Escotilha: <span id="servo-status">Fechada</span></p>
       </div>
       <div class="card">
-        <h3>Segurança (LDR)</h3>
-        <div id="seguranca-box" class="status normal">GABINETE SEGURO</div>
-        <p>Valor Atual: <span id="luz-status" style="font-weight: bold; color: var(--warning); font-size: 1.5em;">--</span></p>
+        <h3>Luminosidade (LDR)</h3>
+        <div class="temp-value" style="font-size: 3rem; color: var(--warning);"><span id="luz-porcento">--</span>%</div>
+        <p>Leitura ADC Bruta: <strong><span id="luz-status">--</span></strong></p>
       </div>
     </div>
     
@@ -231,6 +224,12 @@ const char index_html[] PROGMEM = R"=====(
         document.getElementById("limite").innerHTML = json.max.toFixed(1);
         document.getElementById("luz-status").innerHTML = json.rawLDR;
         
+        // Converte escala invertida do LDR para porcentagem (0% escuro absoluto, 100% luz extrema)
+        let luzPct = Math.round(((4095 - json.rawLDR) / 4095) * 100);
+        if(luzPct < 0) luzPct = 0;
+        if(luzPct > 100) luzPct = 100;
+        document.getElementById("luz-porcento").innerHTML = luzPct;
+        
         let stRele = "Desligada";
         let stServo = "Fechada";
 
@@ -248,14 +247,6 @@ const char index_html[] PROGMEM = R"=====(
           document.getElementById("servo-status").innerHTML = "Fechada (90°)";
         }
 
-        if(json.violado) {
-          document.getElementById("seguranca-box").innerHTML = "ALERTA: FOGO/VIOLAÇÃO!";
-          document.getElementById("seguranca-box").className = "status alerta";
-        } else {
-          document.getElementById("seguranca-box").innerHTML = "GABINETE SEGURO";
-          document.getElementById("seguranca-box").className = "status normal";
-        }
-
         const now = new Date();
         const timeLabel = now.getHours() + ':' + now.getMinutes() + ':' + now.getSeconds();
         
@@ -264,7 +255,7 @@ const char index_html[] PROGMEM = R"=====(
         logT.scrollTop = logT.scrollHeight;
 
         const logL = document.getElementById('log-ldr');
-        logL.value += `[${timeLabel}] ADC: ${json.rawLDR} | ${json.violado ? 'ALERTA' : 'SEGURO'}\n`;
+        logL.value += `[${timeLabel}] ADC: ${json.rawLDR} | Intensidade: ${luzPct}%\n`;
         logL.scrollTop = logL.scrollHeight;
 
         const logS = document.getElementById('log-servo');
@@ -354,18 +345,8 @@ void TaskControl(void *pvParameters) {
 
 void TaskSeguranca(void *pvParameters) {
   for (;;) {
+    // Apenas atualiza a variável continuamente para os gráficos e consoles
     rawLDR = analogRead(PIN_LDR_ANALOG);
-
-    // Lógica RIGOROSA: Abaixo de 1000 significa luz FORTE (Lanterna ou Fogo)
-    gabineteViolado = (rawLDR < LIMITE_LDR);
-
-    if (gabineteViolado && !last_gabinete_violado) {
-      logEvent("ERROR", "Luz Extrema Detectada no Gabinete");
-    } else if (!gabineteViolado && last_gabinete_violado) {
-      logEvent("INFO", "Gabinete Escuro e Seguro");
-    }
-    last_gabinete_violado = gabineteViolado;
-
     vTaskDelay(pdMS_TO_TICKS(500));
   }
 }
@@ -380,8 +361,6 @@ void TaskDisplay(void *pvParameters) {
     lcd.setCursor(0, 1);
     if (tempAtual > tempMax && tempMax > 0) {
       lcd.print("ALERTA CRITICO! ");
-    } else if (gabineteViolado) {
-      lcd.print("GABINETE ABERTO!");
     } else {
       lcd.print("Max:  ");
       lcd.print(tempMax, 0);
@@ -454,17 +433,15 @@ void setup() {
   });
 
   server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request) {
-    StaticJsonDocument<200> doc;
+    StaticJsonDocument<128> doc;
     doc["temp"] = tempAtual;
     doc["max"] = tempMax;
     doc["rawLDR"] = rawLDR;
-    doc["violado"] = gabineteViolado;
     String response;
     serializeJson(doc, response);
     request->send(200, "application/json", response);
   });
 
-  // ROTA DE ESTATÍSTICAS EXPANDIDA (CUIDA DE TODOS OS 12 CARDS)
   server.on("/stats", HTTP_GET, [](AsyncWebServerRequest *request) {
     StaticJsonDocument<512> doc;
     doc["total_heap"] = ESP.getHeapSize();
